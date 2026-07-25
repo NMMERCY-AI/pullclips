@@ -41,7 +41,8 @@ YTDLP_TIMEOUT = 60                  # give up on a stuck/slow link after this ma
 MAX_CONCURRENT_DOWNLOADS = 2        # only this many /pull downloads run at once, rest wait
 
 ALLOWED_DOMAINS = [
-    "youtube.com", "youtu.be",
+    # YouTube temporarily disabled — currently blocked by YouTube's bot detection
+    # on this server. Re-add "youtube.com", "youtu.be" once a fix (e.g. cookies) is in place.
     "tiktok.com",
     "instagram.com",
     "twitter.com", "x.com",

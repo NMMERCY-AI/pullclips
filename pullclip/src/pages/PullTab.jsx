@@ -1,7 +1,7 @@
 import { useState } from "react"
 
 const API = "https://pullclips.onrender.com"
-const PLATFORMS = ["YouTube","Instagram","TikTok","Twitter","Facebook","Reddit"]
+const PLATFORMS = ["Instagram","TikTok","Twitter","Facebook","Reddit"]
 
 const Spinner = () => (
   <svg className="spinner w-4 h-4 inline mr-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
