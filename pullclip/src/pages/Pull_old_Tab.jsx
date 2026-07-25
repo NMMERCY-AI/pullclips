@@ -1,6 +1,6 @@
 import { useState } from "react"
 
-const API = "https://pullclips.onrender.com"
+const API = "http://localhost:8000"
 const PLATFORMS = ["YouTube","Instagram","TikTok","Twitter","Facebook","Reddit"]
 
 const Spinner = () => (

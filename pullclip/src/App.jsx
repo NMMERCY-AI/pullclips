@@ -1,5 +1,5 @@
 import Navbar from "./components/Navbar"
-import PullTab from "./pages/PullTab"
+import PullTab from "./pages/Pull_old_Tab"
 
 export default function App() {
   return (
