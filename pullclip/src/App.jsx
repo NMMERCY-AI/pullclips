@@ -1,5 +1,6 @@
 import Navbar from "./components/Navbar"
 import PullTab from "./pages/PullTab"
+import InfoSection from "./InfoSection"
 
 export default function App() {
   return (
@@ -8,6 +9,7 @@ export default function App() {
       <Navbar />
       <main className="relative z-10 max-w-2xl mx-auto px-6 py-12">
         <PullTab />
+        <InfoSection />
       </main>
     </div>
   )
