@@ -94,7 +94,7 @@ export default function PullTab() {
         <span className="label">Video link</span>
         <div className="flex gap-3">
           <input className="glass-input flex-1 rounded-xl px-4 py-3 text-sm text-gray-700"
-            placeholder="https://youtube.com/watch?v=..."
+            placeholder="https://tiktok.com/@user/video/..."
             value={url} onChange={e=>setUrl(e.target.value)} onKeyDown={e=>e.key==="Enter"&&checkLink()}/>
           <button onClick={checkLink} disabled={checking} className="btn-primary px-5 py-3 rounded-xl text-sm font-medium cursor-pointer whitespace-nowrap">
             {checking?<><Spinner/>Checking...</>:"Check Link"}
