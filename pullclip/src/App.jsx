@@ -1,6 +1,6 @@
 import Navbar from "./components/Navbar"
 import PullTab from "./pages/PullTab"
-import InfoSection from "./InfoSection"
+import InfoSection from "./pages/InfoSection"
 
 export default function App() {
   return (
