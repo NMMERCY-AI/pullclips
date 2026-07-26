@@ -126,7 +126,7 @@ def check_formats(req: UrlRequest, request: Request):
     """Look at the link and return the real formats it actually has (no download)."""
     check_rate_limit(request)
     if not is_allowed_url(req.url):
-        raise HTTPException(status_code=400, detail="This site isn't supported yet. Try a YouTube, TikTok, Instagram, Twitter/X, Facebook, or Reddit link.")
+        raise HTTPException(status_code=400, detail="This site isn't supported yet. Try a TikTok, Instagram, Twitter/X, Facebook, or Reddit link. (YouTube support is temporarily paused.)")
     ydl_opts = {"quiet": True, "noplaylist": True, "skip_download": True, "socket_timeout": YTDLP_TIMEOUT}
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -200,7 +200,7 @@ def check_formats(req: UrlRequest, request: Request):
 def pull_video(req: PullRequest, request: Request):
     check_rate_limit(request)
     if not is_allowed_url(req.url):
-        raise HTTPException(status_code=400, detail="This site isn't supported yet. Try a YouTube, TikTok, Instagram, Twitter/X, Facebook, or Reddit link.")
+        raise HTTPException(status_code=400, detail="This site isn't supported yet. Try a TikTok, Instagram, Twitter/X, Facebook, or Reddit link. (YouTube support is temporarily paused.)")
     output_id = str(uuid.uuid4())
     output_path = DOWNLOADS / output_id
 
