@@ -9,7 +9,7 @@ import yt_dlp
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 
@@ -49,22 +49,16 @@ DOWNLOADS.mkdir(parents=True, exist_ok=True)
 # LIMITS
 # ============================================================
 
-# Maximum video duration: 10 minutes
 MAX_DURATION_SECONDS = 10 * 60
 
-# Maximum video resolution
 MAX_VIDEO_HEIGHT = 1080
 
-# yt-dlp network timeout
 YTDLP_TIMEOUT = 60
 
-# Maximum simultaneous downloads
 MAX_CONCURRENT_DOWNLOADS = 2
 
-# Delete abandoned files after 15 minutes
 CLEANUP_AFTER_SECONDS = 15 * 60
 
-# Rate limiting
 RATE_LIMIT_MAX = 5
 RATE_LIMIT_WINDOW = 60
 
@@ -134,15 +128,6 @@ def health():
 def is_allowed_url(url: str) -> bool:
     """
     Safely validate the actual hostname.
-
-    Example:
-        instagram.com       -> allowed
-        www.instagram.com   -> allowed
-        sub.instagram.com   -> allowed
-
-    But:
-        instagram.com.evil.com -> rejected
-        evil.com/instagram.com -> rejected
     """
 
     try:
@@ -150,7 +135,6 @@ def is_allowed_url(url: str) -> bool:
 
         parsed = urlparse(url)
 
-        # Only HTTP/HTTPS
         if parsed.scheme not in {
             "http",
             "https",
@@ -164,7 +148,6 @@ def is_allowed_url(url: str) -> bool:
 
         hostname = hostname.lower().rstrip(".")
 
-        # Remove www.
         if hostname.startswith("www."):
             hostname = hostname[4:]
 
@@ -193,8 +176,6 @@ def check_rate_limit(
 ):
     """
     Simple in-memory rate limiter.
-
-    This is intentionally simple for your $0 MVP.
     """
 
     ip = (
@@ -205,7 +186,6 @@ def check_rate_limit(
 
     now = time.time()
 
-    # Remove old requests
     request_log[ip] = [
         timestamp
         for timestamp in request_log[ip]
@@ -236,14 +216,6 @@ def delete_job_files(
 ):
     """
     Delete every file belonging to a job.
-
-    This also catches:
-        .part
-        .mp4
-        .webm
-        .m4a
-        .mp3
-        etc.
     """
 
     for file_path in DOWNLOADS.glob(
@@ -277,10 +249,8 @@ def delete_job_files(
 
 def cleanup_old_files():
     """
-    Safety-net cleanup.
-
     Every 5 minutes:
-    delete temporary files older than 15 minutes.
+    delete files older than 15 minutes.
     """
 
     while True:
@@ -331,7 +301,6 @@ def cleanup_old_files():
             )
 
 
-# Start cleanup thread
 Thread(
     target=cleanup_old_files,
     daemon=True,
@@ -399,10 +368,6 @@ def get_format_height(
 ):
     """
     Find the height of the requested format.
-
-    Used to make sure a client cannot bypass
-    the 1080p limit by manually sending another
-    format_id.
     """
 
     for fmt in info.get(
@@ -433,10 +398,6 @@ def check_formats(
 
     url = req.url.strip()
 
-    # --------------------------------------------------------
-    # URL validation
-    # --------------------------------------------------------
-
     if not is_allowed_url(url):
 
         raise HTTPException(
@@ -448,10 +409,6 @@ def check_formats(
                 "or Reddit link."
             ),
         )
-
-    # --------------------------------------------------------
-    # yt-dlp options
-    # --------------------------------------------------------
 
     ydl_opts = {
         "quiet": True,
@@ -487,10 +444,6 @@ def check_formats(
             ),
         )
 
-    # --------------------------------------------------------
-    # Duration limit
-    # --------------------------------------------------------
-
     duration = (
         info.get("duration")
         or 0
@@ -506,10 +459,6 @@ def check_formats(
                 "is 10 minutes."
             ),
         )
-
-    # --------------------------------------------------------
-    # Build format list
-    # --------------------------------------------------------
 
     formats = []
     seen = set()
@@ -531,13 +480,12 @@ def check_formats(
             "format_id"
         )
 
-        # Skip invalid formats
         if not format_id:
             continue
 
-        # ----------------------------------------------------
+        # ====================================================
         # VIDEO
-        # ----------------------------------------------------
+        # ====================================================
 
         if (
             vcodec
@@ -545,12 +493,9 @@ def check_formats(
             and height
         ):
 
-            # IMPORTANT:
-            # Never expose anything above 1080p.
             if height > MAX_VIDEO_HEIGHT:
                 continue
 
-            # Keep only useful resolutions
             if height < 144:
                 continue
 
@@ -587,9 +532,9 @@ def check_formats(
                 }
             )
 
-        # ----------------------------------------------------
+        # ====================================================
         # AUDIO
-        # ----------------------------------------------------
+        # ====================================================
 
         elif (
             vcodec == "none"
@@ -634,7 +579,6 @@ def check_formats(
                 }
             )
 
-    # Highest quality first
     formats.sort(
         key=lambda item: (
             item.get("height", 0),
@@ -671,10 +615,6 @@ def pull_video(
 
     url = req.url.strip()
 
-    # --------------------------------------------------------
-    # URL validation
-    # --------------------------------------------------------
-
     if not is_allowed_url(url):
 
         raise HTTPException(
@@ -687,9 +627,9 @@ def pull_video(
             ),
         )
 
-    # --------------------------------------------------------
-    # Job ID
-    # --------------------------------------------------------
+    # ========================================================
+    # JOB ID
+    # ========================================================
 
     job_id = str(
         uuid.uuid4()
@@ -702,9 +642,9 @@ def pull_video(
         + ".%(ext)s"
     )
 
-    # --------------------------------------------------------
-    # Acquire download slot
-    # --------------------------------------------------------
+    # ========================================================
+    # ACQUIRE DOWNLOAD SLOT
+    # ========================================================
 
     got_slot = (
         download_slots.acquire(
@@ -725,12 +665,9 @@ def pull_video(
     try:
 
         # ====================================================
-        # FIRST: GET INFO
+        # GET INFO
         # ====================================================
 
-        # We do this before downloading so that the
-        # 10-minute limit and 1080p format limit are
-        # enforced server-side.
         info_opts = {
             "quiet": True,
             "noplaylist": True,
@@ -747,9 +684,9 @@ def pull_video(
                 download=False,
             )
 
-        # ----------------------------------------------------
-        # Duration check
-        # ----------------------------------------------------
+        # ====================================================
+        # DURATION CHECK
+        # ====================================================
 
         duration = (
             info.get("duration")
@@ -773,10 +710,6 @@ def pull_video(
 
         if req.format_id:
 
-            # ------------------------------------------------
-            # User selected a format.
-            # ------------------------------------------------
-
             selected_height = (
                 get_format_height(
                     info,
@@ -784,7 +717,6 @@ def pull_video(
                 )
             )
 
-            # Client cannot bypass 1080p
             if (
                 selected_height is not None
                 and selected_height
@@ -800,7 +732,6 @@ def pull_video(
                     ),
                 )
 
-            # Unknown format IDs are rejected.
             if selected_height is None:
 
                 raise HTTPException(
@@ -812,23 +743,14 @@ def pull_video(
                     ),
                 )
 
-            # ------------------------------------------------
-            # Audio
-            # ------------------------------------------------
-
             if req.is_audio:
 
                 format_selector = (
                     req.format_id
                 )
 
-            # ------------------------------------------------
-            # Video
-            # ------------------------------------------------
-
             else:
 
-                # Selected video + best audio.
                 format_selector = (
                     f"{req.format_id}"
                     "+bestaudio/"
@@ -836,10 +758,6 @@ def pull_video(
                 )
 
         else:
-
-            # ------------------------------------------------
-            # No specific format selected.
-            # ------------------------------------------------
 
             format_selector = (
                 quality_to_format(
@@ -865,17 +783,10 @@ def pull_video(
 
             "socket_timeout": YTDLP_TIMEOUT,
 
-            # Keep downloads from becoming playlists
-            "noplaylist": True,
-
-            # Merge video/audio into MP4 when necessary
             "merge_output_format": "mp4",
 
-            # Do not continue partial downloads
-            # from old jobs.
             "continuedl": False,
 
-            # Don't overwrite another job's file.
             "overwrites": False,
         }
 
@@ -916,7 +827,6 @@ def pull_video(
             )
         )
 
-        # Ignore partial files
         files = [
             file_path
             for file_path in files
@@ -939,13 +849,23 @@ def pull_video(
                 "not be found."
             )
 
-        # Usually there should only be one.
-        # Pick the newest valid file.
         final_file = max(
             files,
             key=lambda path: (
                 path.stat().st_mtime
             ),
+        )
+
+        # ====================================================
+        # BRANDED USER DOWNLOAD NAME
+        # ====================================================
+
+        short_id = job_id[:6].upper()
+
+        download_name = (
+            f"PullClips - Clip "
+            f"{short_id}"
+            f"{final_file.suffix}"
         )
 
         print(
@@ -954,14 +874,26 @@ def pull_video(
             f"{final_file.name}"
         )
 
+        print(
+            f"📦 User filename: "
+            f"{download_name}"
+        )
+
         # ====================================================
         # RESPONSE
         # ====================================================
 
         return {
             "success": True,
+
+            # Internal server filename
             "filename": final_file.name,
+
+            # User-facing filename
+            "download_name": download_name,
+
             "title": title,
+
             "download_url": (
                 f"/download/"
                 f"{final_file.name}"
@@ -970,7 +902,6 @@ def pull_video(
 
     except HTTPException:
 
-        # Clean anything created by this job
         delete_job_files(
             job_id
         )
@@ -984,8 +915,6 @@ def pull_video(
             f"[{job_id}]: {e}"
         )
 
-        # IMPORTANT:
-        # Immediately delete partial files.
         delete_job_files(
             job_id
         )
@@ -1001,7 +930,6 @@ def pull_video(
 
     finally:
 
-        # Always release the slot
         download_slots.release()
 
 
@@ -1016,9 +944,9 @@ def download_file(
     filename: str,
 ):
 
-    # --------------------------------------------------------
-    # Security: block path traversal
-    # --------------------------------------------------------
+    # ========================================================
+    # SECURITY: BLOCK PATH TRAVERSAL
+    # ========================================================
 
     if (
         "/" in filename
@@ -1035,9 +963,9 @@ def download_file(
         DOWNLOADS / filename
     )
 
-    # --------------------------------------------------------
-    # Resolve path safely
-    # --------------------------------------------------------
+    # ========================================================
+    # RESOLVE PATH SAFELY
+    # ========================================================
 
     try:
 
@@ -1060,6 +988,7 @@ def download_file(
             )
 
     except HTTPException:
+
         raise
 
     except Exception:
@@ -1069,9 +998,9 @@ def download_file(
             detail="Invalid filename.",
         )
 
-    # --------------------------------------------------------
-    # File exists?
-    # --------------------------------------------------------
+    # ========================================================
+    # FILE EXISTS?
+    # ========================================================
 
     if not file_path.exists():
 
@@ -1090,9 +1019,23 @@ def download_file(
             detail="File not found.",
         )
 
-    # --------------------------------------------------------
-    # Delete AFTER response is finished
-    # --------------------------------------------------------
+    # ========================================================
+    # CREATE USER-FACING FILENAME
+    # ========================================================
+
+    short_id = (
+        file_path.stem[:6].upper()
+    )
+
+    download_name = (
+        f"PullClips - Clip "
+        f"{short_id}"
+        f"{file_path.suffix}"
+    )
+
+    # ========================================================
+    # DELETE AFTER DOWNLOAD
+    # ========================================================
 
     def delete_after_download():
 
@@ -1116,10 +1059,15 @@ def download_file(
 
     return FileResponse(
         path=str(file_path),
-        filename=filename,
+
+        # IMPORTANT:
+        # This is the name the USER sees.
+        filename=download_name,
+
         media_type=(
             "application/octet-stream"
         ),
+
         background=BackgroundTask(
             delete_after_download
         ),
