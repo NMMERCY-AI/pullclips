@@ -75,6 +75,7 @@ ALLOWED_DOMAINS = {
     "facebook.com",
     "fb.watch",
     "reddit.com",
+    "youtube.com"
 }
 
 
