@@ -64,6 +64,13 @@ RATE_LIMIT_WINDOW = 60
 
 
 # ============================================================
+# DENO
+# ============================================================
+
+DENO_PATH = "/opt/render/.deno/bin/deno"
+
+
+# ============================================================
 # SUPPORTED SITES
 # ============================================================
 
@@ -191,7 +198,8 @@ def check_rate_limit(
     request_log[ip] = [
         timestamp
         for timestamp in request_log[ip]
-        if now - timestamp < RATE_LIMIT_WINDOW
+        if now - timestamp
+        < RATE_LIMIT_WINDOW
     ]
 
     if len(request_log[ip]) >= RATE_LIMIT_MAX:
@@ -410,22 +418,32 @@ def check_formats(
             ),
         )
 
-    # IMPORTANT:
-    # Deno JavaScript runtime for yt-dlp
-    info_opts = {
+    # ========================================================
+    # YT-DLP INFO OPTIONS
+    # ========================================================
+
+    ydl_opts = {
+
         "quiet": True,
+
         "noplaylist": True,
+
         "skip_download": True,
+
         "socket_timeout": YTDLP_TIMEOUT,
+
+        # Deno JavaScript runtime
         "js_runtimes": {
-            "deno": {}
+            "deno": {
+                "path": DENO_PATH
+            }
         },
     }
 
     try:
 
         with yt_dlp.YoutubeDL(
-            info_opts
+            ydl_opts
         ) as ydl:
 
             info = ydl.extract_info(
@@ -444,8 +462,8 @@ def check_formats(
             detail=(
                 "Could not read this video. "
                 "The link may be private, "
-                "invalid, or temporarily "
-                "unavailable."
+                "invalid, temporarily unavailable, "
+                "or blocked by the source website."
             ),
         )
 
@@ -466,6 +484,7 @@ def check_formats(
         )
 
     formats = []
+
     seen = set()
 
     for fmt in info.get(
@@ -474,10 +493,16 @@ def check_formats(
     ):
 
         height = fmt.get("height")
+
         ext = fmt.get("ext")
+
         vcodec = fmt.get("vcodec")
+
         acodec = fmt.get("acodec")
-        format_id = fmt.get("format_id")
+
+        format_id = fmt.get(
+            "format_id"
+        )
 
         if not format_id:
             continue
@@ -588,14 +613,18 @@ def check_formats(
 
     return {
         "success": True,
+
         "title": info.get(
             "title",
             "video",
         ),
+
         "thumbnail": info.get(
             "thumbnail"
         ),
+
         "duration": duration,
+
         "formats": formats,
     }
 
@@ -668,12 +697,20 @@ def pull_video(
         # ====================================================
 
         info_opts = {
+
             "quiet": True,
+
             "noplaylist": True,
+
             "skip_download": True,
+
             "socket_timeout": YTDLP_TIMEOUT,
+
+            # Deno JavaScript runtime
             "js_runtimes": {
-                "deno": {}
+                "deno": {
+                    "path": DENO_PATH
+                }
             },
         }
 
@@ -772,17 +809,30 @@ def pull_video(
         # ====================================================
 
         ydl_opts = {
+
             "format": format_selector,
+
             "outtmpl": output_template,
+
             "noplaylist": True,
+
             "quiet": True,
+
             "no_warnings": True,
+
             "socket_timeout": YTDLP_TIMEOUT,
+
             "merge_output_format": "mp4",
+
             "continuedl": False,
+
             "overwrites": False,
+
+            # Deno JavaScript runtime
             "js_runtimes": {
-                "deno": {}
+                "deno": {
+                    "path": DENO_PATH
+                }
             },
         }
 
@@ -880,6 +930,7 @@ def pull_video(
         # ====================================================
 
         return {
+
             "success": True,
 
             # Internal server filename
@@ -1054,9 +1105,9 @@ def download_file(
             )
 
     return FileResponse(
+
         path=str(file_path),
 
-        # IMPORTANT:
         # This is the name the USER sees.
         filename=download_name,
 
@@ -1136,5 +1187,10 @@ def startup():
     print(
         f"⚡ Max concurrent downloads: "
         f"{MAX_CONCURRENT_DOWNLOADS}"
+    )
+
+    print(
+        f"🦕 Deno: "
+        f"{DENO_PATH}"
     )
 
