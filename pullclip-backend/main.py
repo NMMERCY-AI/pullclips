@@ -100,11 +100,13 @@ RATE_LIMIT_MAX = 3
 RATE_LIMIT_WINDOW = 60
 
 
+
 # ============================================================
 # DENO
 # ============================================================
 
 DENO_CANDIDATES = [
+    shutil.which("deno"),
     "/opt/render/.deno/bin/deno",
     "/opt/render/project/src/.deno/bin/deno",
     str(Path.cwd() / ".deno" / "bin" / "deno"),
@@ -113,14 +115,28 @@ DENO_CANDIDATES = [
 DENO_PATH = None
 
 for candidate in DENO_CANDIDATES:
-    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-        DENO_PATH = candidate
-        break
+    if not candidate:
+        continue
+
+    try:
+        candidate_path = Path(candidate)
+
+        if (
+            candidate_path.is_file()
+            and os.access(candidate_path, os.X_OK)
+        ):
+            DENO_PATH = str(candidate_path)
+            break
+
+    except Exception:
+        continue
+
 
 print("")
 print("============================================")
 print("       PULLCLIP ENVIRONMENT CHECK")
 print("============================================")
+
 print("Deno PATH:", DENO_PATH)
 print("System PATH:", os.environ.get("PATH"))
 
@@ -134,11 +150,14 @@ if DENO_PATH:
             capture_output=True,
             text=True,
             timeout=10,
+            check=False,
         )
 
         print("")
         print("Deno version:")
-        print(result.stdout.strip())
+
+        if result.stdout:
+            print(result.stdout.strip())
 
         if result.stderr:
             print("")
@@ -156,10 +175,13 @@ else:
     print("Checked these locations:")
 
     for candidate in DENO_CANDIDATES:
-        print(f"  - {candidate}")
+        if candidate:
+            print(f"  - {candidate}")
 
 print("============================================")
 print("")
+
+
 
 
 # ============================================================
