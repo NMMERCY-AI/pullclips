@@ -1,5 +1,7 @@
+
 import time
 import uuid
+
 from pathlib import Path
 from threading import Thread, Semaphore
 from collections import defaultdict
@@ -52,10 +54,21 @@ DOWNLOADS.mkdir(parents=True, exist_ok=True)
 MAX_DURATION_SECONDS = 10 * 60
 MAX_VIDEO_HEIGHT = 1080
 YTDLP_TIMEOUT = 60
+
 MAX_CONCURRENT_DOWNLOADS = 1
+
 CLEANUP_AFTER_SECONDS = 15 * 60
+
 RATE_LIMIT_MAX = 3
 RATE_LIMIT_WINDOW = 60
+
+
+# ============================================================
+# DENO
+# ============================================================
+
+# Deno installed by the Render build command
+DENO_PATH = "/opt/render/.deno/bin/deno"
 
 
 # ============================================================
@@ -149,7 +162,6 @@ def is_allowed_url(url: str) -> bool:
             hostname = hostname[4:]
 
         for domain in ALLOWED_DOMAINS:
-
             if hostname == domain:
                 return True
 
@@ -191,7 +203,6 @@ def check_rate_limit(
     ]
 
     if len(request_log[ip]) >= RATE_LIMIT_MAX:
-
         raise HTTPException(
             status_code=429,
             detail=(
@@ -218,11 +229,8 @@ def delete_job_files(
     for file_path in DOWNLOADS.glob(
         f"{job_id}*"
     ):
-
         try:
-
             if file_path.is_file():
-
                 file_path.unlink(
                     missing_ok=True
                 )
@@ -233,7 +241,6 @@ def delete_job_files(
                 )
 
         except Exception as e:
-
             print(
                 f"⚠️ Could not delete "
                 f"{file_path}: {e}"
@@ -251,9 +258,7 @@ def cleanup_old_files():
     """
 
     while True:
-
         try:
-
             time.sleep(300)
 
             cutoff = (
@@ -262,19 +267,15 @@ def cleanup_old_files():
             )
 
             for file_path in DOWNLOADS.iterdir():
-
                 try:
-
                     if not file_path.is_file():
                         continue
 
                     modified_time = (
-                        file_path.stat()
-                        .st_mtime
+                        file_path.stat().st_mtime
                     )
 
                     if modified_time < cutoff:
-
                         file_path.unlink(
                             missing_ok=True
                         )
@@ -286,13 +287,11 @@ def cleanup_old_files():
                         )
 
                 except Exception as e:
-
                     print(
                         f"Cleanup error: {e}"
                     )
 
         except Exception as e:
-
             print(
                 f"Cleanup worker error: {e}"
             )
@@ -317,7 +316,6 @@ def quality_to_format(
     ).lower()
 
     formats = {
-
         "1080p": (
             "bestvideo[height<=1080]"
             "+bestaudio/"
@@ -396,22 +394,25 @@ def check_formats(
     url = req.url.strip()
 
     if not is_allowed_url(url):
-
         raise HTTPException(
             status_code=400,
             detail=(
                 "This site isn't supported yet. "
-                "Try a TikTok, Instagram, "
+                "Try a YouTube, TikTok, Instagram, "
                 "Twitter/X, Facebook, "
                 "or Reddit link."
             ),
         )
 
+    # Deno is explicitly configured here
     ydl_opts = {
         "quiet": True,
         "noplaylist": True,
         "skip_download": True,
         "socket_timeout": YTDLP_TIMEOUT,
+        "js_runtimes": {
+            "deno": DENO_PATH,
+        },
     }
 
     try:
@@ -466,11 +467,8 @@ def check_formats(
     ):
 
         height = fmt.get("height")
-
         ext = fmt.get("ext")
-
         vcodec = fmt.get("vcodec")
-
         acodec = fmt.get("acodec")
 
         format_id = fmt.get(
@@ -613,12 +611,11 @@ def pull_video(
     url = req.url.strip()
 
     if not is_allowed_url(url):
-
         raise HTTPException(
             status_code=400,
             detail=(
                 "This site isn't supported yet. "
-                "Try a TikTok, Instagram, "
+                "Try a YouTube, TikTok, Instagram, "
                 "Twitter/X, Facebook, "
                 "or Reddit link."
             ),
@@ -650,7 +647,6 @@ def pull_video(
     )
 
     if not got_slot:
-
         raise HTTPException(
             status_code=503,
             detail=(
@@ -665,11 +661,15 @@ def pull_video(
         # GET INFO
         # ====================================================
 
+        # Deno is explicitly configured here too
         info_opts = {
             "quiet": True,
             "noplaylist": True,
             "skip_download": True,
             "socket_timeout": YTDLP_TIMEOUT,
+            "js_runtimes": {
+                "deno": DENO_PATH,
+            },
         }
 
         with yt_dlp.YoutubeDL(
@@ -767,24 +767,20 @@ def pull_video(
         # ====================================================
 
         ydl_opts = {
-
             "format": format_selector,
-
             "outtmpl": output_template,
-
             "noplaylist": True,
-
             "quiet": True,
-
             "no_warnings": True,
-
             "socket_timeout": YTDLP_TIMEOUT,
-
             "merge_output_format": "mp4",
-
             "continuedl": False,
-
             "overwrites": False,
+
+            # Deno for YouTube JavaScript challenges
+            "js_runtimes": {
+                "deno": DENO_PATH,
+            },
         }
 
         # ====================================================
@@ -1137,4 +1133,9 @@ def startup():
     print(
         f"⚡ Max concurrent downloads: "
         f"{MAX_CONCURRENT_DOWNLOADS}"
+    )
+
+    print(
+        f"🦕 Deno: "
+        f"{DENO_PATH}"
     )
