@@ -1,11 +1,11 @@
+
 import os
 import shutil
 import subprocess
 import time
 import uuid
-
 from pathlib import Path
-from threading import Thread, Semaphore
+from threading import Thread, Semaphore, Lock
 from collections import defaultdict
 from urllib.parse import urlparse
 
@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 app = FastAPI(
     title="PullClip API",
-    version="1.0.0",
+    version="1.1.0",
 )
 
 
@@ -32,13 +32,31 @@ app = FastAPI(
 # CORS
 # ============================================================
 
+# Keep this open for now if your frontend is hosted separately.
+# Once you know your exact frontend domain, replace "*" with it.
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+# ============================================================
+# SECURITY HEADERS
+# ============================================================
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+
+    return response
 
 
 # ============================================================
@@ -46,7 +64,10 @@ app.add_middleware(
 # ============================================================
 
 DOWNLOADS = Path("downloads")
-DOWNLOADS.mkdir(parents=True, exist_ok=True)
+DOWNLOADS.mkdir(
+    parents=True,
+    exist_ok=True,
+)
 
 
 # ============================================================
@@ -54,25 +75,29 @@ DOWNLOADS.mkdir(parents=True, exist_ok=True)
 # ============================================================
 
 MAX_DURATION_SECONDS = 10 * 60
+
 MAX_VIDEO_HEIGHT = 1080
+
 YTDLP_TIMEOUT = 60
+
 MAX_CONCURRENT_DOWNLOADS = 1
+
 CLEANUP_AFTER_SECONDS = 15 * 60
+
+# Maximum downloaded file size.
+# 500 MB.
+MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024
+
+# Maximum request body size.
+MAX_REQUEST_BODY_BYTES = 10 * 1024
+
+# Rate limiting.
 RATE_LIMIT_MAX = 3
 RATE_LIMIT_WINDOW = 60
 
 
 # ============================================================
 # DENO
-# ============================================================
-#
-# Instead of guessing the Render Deno path, we ask the
-# operating system to find "deno".
-#
-# If Deno is installed and available on PATH, this will return
-# its real path.
-#
-# If Deno is not available, it returns None.
 # ============================================================
 
 DENO_PATH = shutil.which("deno")
@@ -86,9 +111,13 @@ print("Deno PATH:", DENO_PATH)
 print("System PATH:", os.environ.get("PATH"))
 
 if DENO_PATH:
+
     try:
         result = subprocess.run(
-            [DENO_PATH, "--version"],
+            [
+                DENO_PATH,
+                "--version",
+            ],
             capture_output=True,
             text=True,
             timeout=10,
@@ -104,11 +133,13 @@ if DENO_PATH:
             print(result.stderr.strip())
 
     except Exception as e:
+
         print("")
         print("❌ Deno check failed:")
         print(e)
 
 else:
+
     print("")
     print("❌ DENO NOT FOUND")
     print("Deno is not currently available on PATH.")
@@ -140,6 +171,8 @@ ALLOWED_DOMAINS = {
 
 request_log = defaultdict(list)
 
+rate_limit_lock = Lock()
+
 
 # ============================================================
 # DOWNLOAD CONCURRENCY
@@ -166,6 +199,40 @@ class PullRequest(BaseModel):
 
 
 # ============================================================
+# REQUEST BODY SIZE
+# ============================================================
+
+@app.middleware("http")
+async def request_size_limit(
+    request: Request,
+    call_next,
+):
+
+    content_length = request.headers.get(
+        "content-length"
+    )
+
+    if content_length:
+
+        try:
+            content_length = int(
+                content_length
+            )
+
+            if content_length > MAX_REQUEST_BODY_BYTES:
+
+                raise HTTPException(
+                    status_code=413,
+                    detail="Request is too large.",
+                )
+
+        except ValueError:
+            pass
+
+    return await call_next(request)
+
+
+# ============================================================
 # HEALTH CHECK
 # ============================================================
 
@@ -180,10 +247,27 @@ def health():
 
 
 # ============================================================
+# ROOT
+# ============================================================
+
+@app.get("/")
+def root():
+
+    return {
+        "status": "ok",
+        "service": "pullclip",
+        "message": "PullClip API is running.",
+    }
+
+
+# ============================================================
 # URL VALIDATION
 # ============================================================
 
-def is_allowed_url(url: str) -> bool:
+def is_allowed_url(
+    url: str,
+) -> bool:
+
     """
     Safely validate the actual hostname.
     """
@@ -191,6 +275,9 @@ def is_allowed_url(url: str) -> bool:
     try:
 
         url = url.strip()
+
+        if not url:
+            return False
 
         parsed = urlparse(url)
 
@@ -234,8 +321,11 @@ def is_allowed_url(url: str) -> bool:
 def check_rate_limit(
     request: Request,
 ):
+
     """
     Simple in-memory rate limiter.
+
+    This protects the current Render instance.
     """
 
     ip = (
@@ -246,24 +336,61 @@ def check_rate_limit(
 
     now = time.time()
 
-    request_log[ip] = [
-        timestamp
-        for timestamp in request_log[ip]
-        if now - timestamp < RATE_LIMIT_WINDOW
-    ]
+    with rate_limit_lock:
 
-    if len(request_log[ip]) >= RATE_LIMIT_MAX:
+        request_log[ip] = [
+            timestamp
+            for timestamp in request_log[ip]
+            if now - timestamp < RATE_LIMIT_WINDOW
+        ]
+
+        if len(request_log[ip]) >= RATE_LIMIT_MAX:
+
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "Too many requests. "
+                    "Please wait a moment "
+                    "and try again."
+                ),
+            )
+
+        request_log[ip].append(now)
+
+
+# ============================================================
+# VALIDATE URL INPUT
+# ============================================================
+
+def validate_url_or_raise(
+    url: str,
+):
+
+    if not url:
 
         raise HTTPException(
-            status_code=429,
-            detail=(
-                "Too many requests. "
-                "Please wait a moment "
-                "and try again."
-            ),
+            status_code=400,
+            detail="Please provide a video URL.",
         )
 
-    request_log[ip].append(now)
+    if len(url) > 2048:
+
+        raise HTTPException(
+            status_code=400,
+            detail="The URL is too long.",
+        )
+
+    if not is_allowed_url(url):
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This site isn't supported yet. "
+                "Try a YouTube, TikTok, Instagram, "
+                "Twitter/X, Facebook, "
+                "or Reddit link."
+            ),
+        )
 
 
 # ============================================================
@@ -273,12 +400,13 @@ def check_rate_limit(
 def delete_job_files(
     job_id: str,
 ):
+
     """
     Delete every file belonging to a job.
     """
 
     for file_path in DOWNLOADS.glob(
-        f"{job_id}*"
+        f"{job_id}.*"
     ):
 
         try:
@@ -307,6 +435,7 @@ def delete_job_files(
 # ============================================================
 
 def cleanup_old_files():
+
     """
     Every 5 minutes:
     delete files older than 15 minutes.
@@ -370,12 +499,11 @@ Thread(
 # ============================================================
 
 def get_ytdlp_runtime_options():
+
     """
     Build the JavaScript runtime configuration.
 
     If Deno exists, tell yt-dlp to use it.
-
-    If Deno does not exist, don't provide a fake path.
     """
 
     options = {}
@@ -470,6 +598,74 @@ def get_format_height(
 
 
 # ============================================================
+# FIND FORMAT
+# ============================================================
+
+def get_requested_format(
+    info: dict,
+    format_id: str,
+):
+
+    """
+    Find the exact format returned by yt-dlp.
+    """
+
+    for fmt in info.get(
+        "formats",
+        [],
+    ):
+
+        if str(
+            fmt.get("format_id")
+        ) == str(format_id):
+
+            return fmt
+
+    return None
+
+
+# ============================================================
+# FILE SIZE CHECK
+# ============================================================
+
+def validate_file_size(
+    file_path: Path,
+):
+
+    try:
+
+        size = file_path.stat().st_size
+
+    except FileNotFoundError:
+
+        raise RuntimeError(
+            "Downloaded file disappeared."
+        )
+
+    if size > MAX_FILE_SIZE_BYTES:
+
+        print(
+            f"❌ File too large: "
+            f"{size} bytes"
+        )
+
+        try:
+            file_path.unlink(
+                missing_ok=True
+            )
+        except Exception:
+            pass
+
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "The downloaded file is too large. "
+                "Maximum allowed size is 500 MB."
+            ),
+        )
+
+
+# ============================================================
 # CHECK URL / FORMATS
 # ============================================================
 
@@ -483,30 +679,24 @@ def check_formats(
 
     url = req.url.strip()
 
-    if not is_allowed_url(url):
-
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "This site isn't supported yet. "
-                "Try a YouTube, TikTok, Instagram, "
-                "Twitter/X, Facebook, "
-                "or Reddit link."
-            ),
-        )
+    validate_url_or_raise(url)
 
     # ========================================================
     # YT-DLP INFO OPTIONS
     # ========================================================
 
     ydl_opts = {
+
         "quiet": True,
+
         "noplaylist": True,
+
         "skip_download": True,
+
         "socket_timeout": YTDLP_TIMEOUT,
+
     }
 
-    # Add Deno only when available.
     ydl_opts.update(
         get_ytdlp_runtime_options()
     )
@@ -527,17 +717,13 @@ def check_formats(
         error_text = str(e)
 
         print(
-            f"❌ Check failed: {error_text}"
+            f"❌ Check failed: "
+            f"{error_text}"
         )
-
-        # ----------------------------------------------------
-        # YouTube rate limiting
-        # ----------------------------------------------------
 
         if (
             "429" in error_text
-            or "Too Many Requests"
-            in error_text
+            or "Too Many Requests" in error_text
         ):
 
             raise HTTPException(
@@ -548,10 +734,6 @@ def check_formats(
                     "Please try again later."
                 ),
             )
-
-        # ----------------------------------------------------
-        # YouTube bot/authentication challenge
-        # ----------------------------------------------------
 
         if (
             "Sign in to confirm"
@@ -569,10 +751,6 @@ def check_formats(
                 ),
             )
 
-        # ----------------------------------------------------
-        # General extractor failure
-        # ----------------------------------------------------
-
         raise HTTPException(
             status_code=502,
             detail=(
@@ -582,6 +760,10 @@ def check_formats(
                 "or blocked by the source website."
             ),
         )
+
+    # ========================================================
+    # DURATION
+    # ========================================================
 
     duration = (
         info.get("duration")
@@ -599,6 +781,10 @@ def check_formats(
             ),
         )
 
+    # ========================================================
+    # FORMATS
+    # ========================================================
+
     formats = []
 
     seen = set()
@@ -609,9 +795,13 @@ def check_formats(
     ):
 
         height = fmt.get("height")
+
         ext = fmt.get("ext")
+
         vcodec = fmt.get("vcodec")
+
         acodec = fmt.get("acodec")
+
         format_id = fmt.get("format_id")
 
         if not format_id:
@@ -723,14 +913,18 @@ def check_formats(
 
     return {
         "success": True,
+
         "title": info.get(
             "title",
             "video",
         ),
+
         "thumbnail": info.get(
             "thumbnail"
         ),
+
         "duration": duration,
+
         "formats": formats,
     }
 
@@ -749,17 +943,7 @@ def pull_video(
 
     url = req.url.strip()
 
-    if not is_allowed_url(url):
-
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "This site isn't supported yet. "
-                "Try a YouTube, TikTok, Instagram, "
-                "Twitter/X, Facebook, "
-                "or Reddit link."
-            ),
-        )
+    validate_url_or_raise(url)
 
     # ========================================================
     # JOB ID
@@ -803,10 +987,15 @@ def pull_video(
         # ====================================================
 
         info_opts = {
+
             "quiet": True,
+
             "noplaylist": True,
+
             "skip_download": True,
+
             "socket_timeout": YTDLP_TIMEOUT,
+
         }
 
         info_opts.update(
@@ -848,17 +1037,31 @@ def pull_video(
 
         if req.format_id:
 
+            selected_format = get_requested_format(
+                info,
+                req.format_id,
+            )
+
+            if selected_format is None:
+
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Invalid video format. "
+                        "Please refresh the page "
+                        "and try again."
+                    ),
+                )
+
             selected_height = (
-                get_format_height(
-                    info,
-                    req.format_id,
+                selected_format.get(
+                    "height"
                 )
             )
 
             if (
                 selected_height is not None
-                and selected_height
-                > MAX_VIDEO_HEIGHT
+                and selected_height > MAX_VIDEO_HEIGHT
             ):
 
                 raise HTTPException(
@@ -870,24 +1073,42 @@ def pull_video(
                     ),
                 )
 
-            if selected_height is None:
-
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "Invalid video format. "
-                        "Please refresh the page "
-                        "and try again."
-                    ),
-                )
+            # Make sure the requested format
+            # actually belongs to this video.
 
             if req.is_audio:
+
+                if (
+                    selected_format.get("vcodec")
+                    != "none"
+                ):
+
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "The selected format "
+                            "is not an audio format."
+                        ),
+                    )
 
                 format_selector = (
                     req.format_id
                 )
 
             else:
+
+                if (
+                    selected_format.get("vcodec")
+                    == "none"
+                ):
+
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "The selected format "
+                            "is not a video format."
+                        ),
+                    )
 
                 format_selector = (
                     f"{req.format_id}"
@@ -908,15 +1129,25 @@ def pull_video(
         # ====================================================
 
         ydl_opts = {
+
             "format": format_selector,
+
             "outtmpl": output_template,
+
             "noplaylist": True,
+
             "quiet": True,
+
             "no_warnings": True,
+
             "socket_timeout": YTDLP_TIMEOUT,
+
             "merge_output_format": "mp4",
+
             "continuedl": False,
+
             "overwrites": False,
+
         }
 
         ydl_opts.update(
@@ -990,10 +1221,20 @@ def pull_video(
         )
 
         # ====================================================
+        # FILE SIZE SECURITY CHECK
+        # ====================================================
+
+        validate_file_size(
+            final_file
+        )
+
+        # ====================================================
         # BRANDED USER DOWNLOAD NAME
         # ====================================================
 
-        short_id = job_id[:6].upper()
+        short_id = (
+            job_id[:6].upper()
+        )
 
         download_name = (
             f"PullClips - Clip "
@@ -1017,6 +1258,7 @@ def pull_video(
         # ====================================================
 
         return {
+
             "success": True,
 
             "filename": final_file.name,
@@ -1053,9 +1295,9 @@ def pull_video(
             job_id
         )
 
-        # ----------------------------------------------------
-        # YouTube rate limiting
-        # ----------------------------------------------------
+        # ====================================================
+        # YOUTUBE RATE LIMIT
+        # ====================================================
 
         if (
             "429" in error_text
@@ -1072,9 +1314,9 @@ def pull_video(
                 ),
             )
 
-        # ----------------------------------------------------
-        # YouTube bot/authentication challenge
-        # ----------------------------------------------------
+        # ====================================================
+        # YOUTUBE BOT CHALLENGE
+        # ====================================================
 
         if (
             "Sign in to confirm"
@@ -1092,9 +1334,9 @@ def pull_video(
                 ),
             )
 
-        # ----------------------------------------------------
-        # General failure
-        # ----------------------------------------------------
+        # ====================================================
+        # GENERAL FAILURE
+        # ====================================================
 
         raise HTTPException(
             status_code=502,
@@ -1136,6 +1378,15 @@ def download_file(
             detail="Invalid filename.",
         )
 
+    # Only allow our UUID-style job files.
+
+    if "." not in filename:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid filename.",
+        )
+
     file_path = (
         DOWNLOADS / filename
     )
@@ -1155,8 +1406,8 @@ def download_file(
         )
 
         if (
-            downloads_root
-            not in resolved_file.parents
+            resolved_file.parent
+            != downloads_root
         ):
 
             raise HTTPException(
@@ -1197,7 +1448,15 @@ def download_file(
         )
 
     # ========================================================
-    # CREATE USER-FACING FILENAME
+    # FINAL SIZE CHECK
+    # ========================================================
+
+    validate_file_size(
+        file_path
+    )
+
+    # ========================================================
+    # USER FILENAME
     # ========================================================
 
     short_id = (
@@ -1235,6 +1494,7 @@ def download_file(
             )
 
     return FileResponse(
+
         path=str(file_path),
 
         filename=download_name,
@@ -1277,6 +1537,13 @@ def cleanup_file(
 
     if file_path.exists():
 
+        if not file_path.is_file():
+
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid file.",
+            )
+
         file_path.unlink(
             missing_ok=True
         )
@@ -1294,6 +1561,7 @@ def cleanup_file(
 def startup():
 
     print("")
+
     print("🚀 PullClip API started")
 
     print(
@@ -1312,6 +1580,11 @@ def startup():
     )
 
     print(
+        f"📦 Max file size: "
+        f"{MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB"
+    )
+
+    print(
         f"⚡ Max concurrent downloads: "
         f"{MAX_CONCURRENT_DOWNLOADS}"
     )
@@ -1322,3 +1595,4 @@ def startup():
     )
 
     print("")
+
