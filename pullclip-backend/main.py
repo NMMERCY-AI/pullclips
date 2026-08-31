@@ -104,41 +104,18 @@ RATE_LIMIT_WINDOW = 60
 # DENO
 # ============================================================
 
-def find_deno():
-    """
-    Find Deno even when Render does not expose it through
-    the normal environment PATH.
-    """
+DENO_CANDIDATES = [
+    "/opt/render/.deno/bin/deno",
+    "/opt/render/project/src/.deno/bin/deno",
+    str(Path.cwd() / ".deno" / "bin" / "deno"),
+]
 
-    possible_paths = []
+DENO_PATH = None
 
-    # Normal PATH lookup.
-    normal_path = shutil.which("deno")
-
-    if normal_path:
-        possible_paths.append(normal_path)
-
-    # Render's Deno installation.
-    render_deno = "/opt/render/.deno/bin/deno"
-
-    if os.path.isfile(render_deno):
-        possible_paths.append(render_deno)
-
-    # Project-local Deno installation.
-    project_deno = Path.cwd() / ".deno" / "bin" / "deno"
-
-    if project_deno.is_file():
-        possible_paths.append(str(project_deno))
-
-    for path in possible_paths:
-        if os.path.isfile(path):
-            return path
-
-    return None
-
-
-DENO_PATH = find_deno()
-
+for candidate in DENO_CANDIDATES:
+    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        DENO_PATH = candidate
+        break
 
 print("")
 print("============================================")
@@ -176,7 +153,10 @@ if DENO_PATH:
 else:
     print("")
     print("❌ DENO NOT FOUND")
-    print("Deno is not currently available.")
+    print("Checked these locations:")
+
+    for candidate in DENO_CANDIDATES:
+        print(f"  - {candidate}")
 
 print("============================================")
 print("")
