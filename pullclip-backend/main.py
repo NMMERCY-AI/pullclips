@@ -1,4 +1,6 @@
-
+import os
+import shutil
+import subprocess
 import time
 import uuid
 
@@ -54,11 +56,8 @@ DOWNLOADS.mkdir(parents=True, exist_ok=True)
 MAX_DURATION_SECONDS = 10 * 60
 MAX_VIDEO_HEIGHT = 1080
 YTDLP_TIMEOUT = 60
-
 MAX_CONCURRENT_DOWNLOADS = 1
-
 CLEANUP_AFTER_SECONDS = 15 * 60
-
 RATE_LIMIT_MAX = 3
 RATE_LIMIT_WINDOW = 60
 
@@ -66,8 +65,56 @@ RATE_LIMIT_WINDOW = 60
 # ============================================================
 # DENO
 # ============================================================
+#
+# Instead of guessing the Render Deno path, we ask the
+# operating system to find "deno".
+#
+# If Deno is installed and available on PATH, this will return
+# its real path.
+#
+# If Deno is not available, it returns None.
+# ============================================================
 
-DENO_PATH = "/opt/render/.deno/bin/deno"
+DENO_PATH = shutil.which("deno")
+
+print("")
+print("============================================")
+print("       PULLCLIP ENVIRONMENT CHECK")
+print("============================================")
+
+print("Deno PATH:", DENO_PATH)
+print("System PATH:", os.environ.get("PATH"))
+
+if DENO_PATH:
+    try:
+        result = subprocess.run(
+            [DENO_PATH, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        print("")
+        print("Deno version:")
+        print(result.stdout.strip())
+
+        if result.stderr:
+            print("")
+            print("Deno stderr:")
+            print(result.stderr.strip())
+
+    except Exception as e:
+        print("")
+        print("❌ Deno check failed:")
+        print(e)
+
+else:
+    print("")
+    print("❌ DENO NOT FOUND")
+    print("Deno is not currently available on PATH.")
+
+print("============================================")
+print("")
 
 
 # ============================================================
@@ -124,9 +171,11 @@ class PullRequest(BaseModel):
 
 @app.get("/health")
 def health():
+
     return {
         "status": "ok",
         "service": "pullclip",
+        "deno_available": DENO_PATH is not None,
     }
 
 
@@ -140,6 +189,7 @@ def is_allowed_url(url: str) -> bool:
     """
 
     try:
+
         url = url.strip()
 
         parsed = urlparse(url)
@@ -173,6 +223,7 @@ def is_allowed_url(url: str) -> bool:
         return False
 
     except Exception:
+
         return False
 
 
@@ -198,8 +249,7 @@ def check_rate_limit(
     request_log[ip] = [
         timestamp
         for timestamp in request_log[ip]
-        if now - timestamp
-        < RATE_LIMIT_WINDOW
+        if now - timestamp < RATE_LIMIT_WINDOW
     ]
 
     if len(request_log[ip]) >= RATE_LIMIT_MAX:
@@ -316,6 +366,32 @@ Thread(
 
 
 # ============================================================
+# YT-DLP OPTIONS HELPER
+# ============================================================
+
+def get_ytdlp_runtime_options():
+    """
+    Build the JavaScript runtime configuration.
+
+    If Deno exists, tell yt-dlp to use it.
+
+    If Deno does not exist, don't provide a fake path.
+    """
+
+    options = {}
+
+    if DENO_PATH:
+
+        options["js_runtimes"] = {
+            "deno": {
+                "path": DENO_PATH
+            }
+        }
+
+    return options
+
+
+# ============================================================
 # QUALITY → YT-DLP FORMAT
 # ============================================================
 
@@ -374,6 +450,7 @@ def get_format_height(
     info: dict,
     format_id: str,
 ):
+
     """
     Find the height of the requested format.
     """
@@ -423,22 +500,16 @@ def check_formats(
     # ========================================================
 
     ydl_opts = {
-
         "quiet": True,
-
         "noplaylist": True,
-
         "skip_download": True,
-
         "socket_timeout": YTDLP_TIMEOUT,
-
-        # Deno JavaScript runtime
-        "js_runtimes": {
-            "deno": {
-                "path": DENO_PATH
-            }
-        },
     }
+
+    # Add Deno only when available.
+    ydl_opts.update(
+        get_ytdlp_runtime_options()
+    )
 
     try:
 
@@ -453,12 +524,57 @@ def check_formats(
 
     except Exception as e:
 
+        error_text = str(e)
+
         print(
-            f"❌ Check failed: {e}"
+            f"❌ Check failed: {error_text}"
         )
 
+        # ----------------------------------------------------
+        # YouTube rate limiting
+        # ----------------------------------------------------
+
+        if (
+            "429" in error_text
+            or "Too Many Requests"
+            in error_text
+        ):
+
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "YouTube temporarily "
+                    "rate-limited this server. "
+                    "Please try again later."
+                ),
+            )
+
+        # ----------------------------------------------------
+        # YouTube bot/authentication challenge
+        # ----------------------------------------------------
+
+        if (
+            "Sign in to confirm"
+            in error_text
+            or "not a bot"
+            in error_text
+        ):
+
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "YouTube requires "
+                    "additional verification "
+                    "for this request."
+                ),
+            )
+
+        # ----------------------------------------------------
+        # General extractor failure
+        # ----------------------------------------------------
+
         raise HTTPException(
-            status_code=400,
+            status_code=502,
             detail=(
                 "Could not read this video. "
                 "The link may be private, "
@@ -493,16 +609,10 @@ def check_formats(
     ):
 
         height = fmt.get("height")
-
         ext = fmt.get("ext")
-
         vcodec = fmt.get("vcodec")
-
         acodec = fmt.get("acodec")
-
-        format_id = fmt.get(
-            "format_id"
-        )
+        format_id = fmt.get("format_id")
 
         if not format_id:
             continue
@@ -613,18 +723,14 @@ def check_formats(
 
     return {
         "success": True,
-
         "title": info.get(
             "title",
             "video",
         ),
-
         "thumbnail": info.get(
             "thumbnail"
         ),
-
         "duration": duration,
-
         "formats": formats,
     }
 
@@ -697,22 +803,15 @@ def pull_video(
         # ====================================================
 
         info_opts = {
-
             "quiet": True,
-
             "noplaylist": True,
-
             "skip_download": True,
-
             "socket_timeout": YTDLP_TIMEOUT,
-
-            # Deno JavaScript runtime
-            "js_runtimes": {
-                "deno": {
-                    "path": DENO_PATH
-                }
-            },
         }
+
+        info_opts.update(
+            get_ytdlp_runtime_options()
+        )
 
         with yt_dlp.YoutubeDL(
             info_opts
@@ -809,32 +908,20 @@ def pull_video(
         # ====================================================
 
         ydl_opts = {
-
             "format": format_selector,
-
             "outtmpl": output_template,
-
             "noplaylist": True,
-
             "quiet": True,
-
             "no_warnings": True,
-
             "socket_timeout": YTDLP_TIMEOUT,
-
             "merge_output_format": "mp4",
-
             "continuedl": False,
-
             "overwrites": False,
-
-            # Deno JavaScript runtime
-            "js_runtimes": {
-                "deno": {
-                    "path": DENO_PATH
-                }
-            },
         }
+
+        ydl_opts.update(
+            get_ytdlp_runtime_options()
+        )
 
         # ====================================================
         # DOWNLOAD
@@ -930,13 +1017,10 @@ def pull_video(
         # ====================================================
 
         return {
-
             "success": True,
 
-            # Internal server filename
             "filename": final_file.name,
 
-            # User-facing filename
             "download_name": download_name,
 
             "title": title,
@@ -957,17 +1041,63 @@ def pull_video(
 
     except Exception as e:
 
+        error_text = str(e)
+
         print(
             f"❌ Download failed "
-            f"[{job_id}]: {e}"
+            f"[{job_id}]: "
+            f"{error_text}"
         )
 
         delete_job_files(
             job_id
         )
 
+        # ----------------------------------------------------
+        # YouTube rate limiting
+        # ----------------------------------------------------
+
+        if (
+            "429" in error_text
+            or "Too Many Requests"
+            in error_text
+        ):
+
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "YouTube temporarily "
+                    "rate-limited this server. "
+                    "Please try again later."
+                ),
+            )
+
+        # ----------------------------------------------------
+        # YouTube bot/authentication challenge
+        # ----------------------------------------------------
+
+        if (
+            "Sign in to confirm"
+            in error_text
+            or "not a bot"
+            in error_text
+        ):
+
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "YouTube requires "
+                    "additional verification "
+                    "for this request."
+                ),
+            )
+
+        # ----------------------------------------------------
+        # General failure
+        # ----------------------------------------------------
+
         raise HTTPException(
-            status_code=400,
+            status_code=502,
             detail=(
                 "Could not download this video. "
                 "The link may be unavailable, "
@@ -1105,10 +1235,8 @@ def download_file(
             )
 
     return FileResponse(
-
         path=str(file_path),
 
-        # This is the name the USER sees.
         filename=download_name,
 
         media_type=(
@@ -1165,9 +1293,8 @@ def cleanup_file(
 @app.on_event("startup")
 def startup():
 
-    print(
-        "🚀 PullClip API started"
-    )
+    print("")
+    print("🚀 PullClip API started")
 
     print(
         f"📁 Downloads: "
@@ -1190,7 +1317,8 @@ def startup():
     )
 
     print(
-        f"🦕 Deno: "
+        f"🦕 Deno detected: "
         f"{DENO_PATH}"
     )
 
+    print("")
