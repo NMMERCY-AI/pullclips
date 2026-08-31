@@ -50,16 +50,11 @@ DOWNLOADS.mkdir(parents=True, exist_ok=True)
 # ============================================================
 
 MAX_DURATION_SECONDS = 10 * 60
-
 MAX_VIDEO_HEIGHT = 1080
-
 YTDLP_TIMEOUT = 60
-
-MAX_CONCURRENT_DOWNLOADS = 2
-
+MAX_CONCURRENT_DOWNLOADS = 1
 CLEANUP_AFTER_SECONDS = 15 * 60
-
-RATE_LIMIT_MAX = 5
+RATE_LIMIT_MAX = 3
 RATE_LIMIT_WINDOW = 60
 
 
@@ -68,6 +63,8 @@ RATE_LIMIT_WINDOW = 60
 # ============================================================
 
 ALLOWED_DOMAINS = {
+    "youtube.com",
+    "youtu.be",
     "tiktok.com",
     "instagram.com",
     "twitter.com",
@@ -75,7 +72,6 @@ ALLOWED_DOMAINS = {
     "facebook.com",
     "fb.watch",
     "reddit.com",
-    
 }
 
 
