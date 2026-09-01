@@ -3,4 +3,3 @@ uvicorn
 yt-dlp[default,curl-cffi]
 python-multipart
 httpx
-bgutil-ytdlp-pot-provider
